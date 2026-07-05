@@ -85,17 +85,18 @@ jobs:
             -camera-back none \
             -camera-front none &
           
-          # 3. Start x11vnc bound specifically to IPv4 localhost
+          # 3. Start x11vnc bound specifically to IPv4 loopback
           x11vnc -display :1 -nopw -forever -bg -listen 127.0.0.1 -rfbport 5900 &
           sleep 3
 
-          # Localize noVNC assets to bypass system directory permissions
+          # Set up local web root assets for noVNC
           mkdir -p ./novnc_web
           cp -r /usr/share/novnc/* ./novnc_web/
           ln -sf ./vnc.html ./novnc_web/index.html
           
-          # 4. Use noVNC to serve web assets. Bound strictly to IPv4 (127.0.0.1) instead of standard localhost
-          /usr/share/novnc/utils/launch.sh --web ./novnc_web --vnc 127.0.0.1:5900 --listen 127.0.0.1:8083 &
+          # 4. FIX: Run websockify directly to bridge port 8083 to VNC port 5900
+          # This avoids launch.sh's shell environment script drops
+          websockify --web ./novnc_web 127.0.0.1:8083 127.0.0.1:5900 &
           sleep 5
 
       - name: Expose Stream via Cloudflare Tunnel
@@ -104,6 +105,6 @@ jobs:
           echo "🚀 LOOK BELOW FOR THE '.trycloudflare.com' LINK TO CONNECT 🚀"
           echo "=========================================================="
           
-          # Force IPv4 loopback IP here so cloudflared doesn't pick up IPv6 [::1] 
+          # Route directly to the verified IPv4 websockify server
           cloudflared tunnel --url http://127.0.0.1:8083
           
