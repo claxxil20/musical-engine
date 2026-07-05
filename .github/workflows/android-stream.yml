@@ -29,11 +29,18 @@ jobs:
 
       - name: Install Android SDK & Create AVD
         run: |
-          # Install specific Android 33 components
-          sdkmanager --install "system-images;android-33;google_apis;x86_64" "emulator" "platform-tools"
+          # Explicit paths to pre-installed SDK binaries on the GitHub Runner
+          SDK_MANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          AVD_MANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
           
-          # Create the AVD device
-          echo "no" | avdmanager create avd \
+          # Auto-accept licenses to prevent terminal hangs
+          echo "y" | $SDK_MANAGER --licenses
+          
+          # Install system image and components using absolute path
+          echo "y" | $SDK_MANAGER "system-images;android-33;google_apis;x86_64" "emulator" "platform-tools"
+          
+          # Create the AVD
+          echo "no" | $AVD_MANAGER create avd \
             --name test_avd \
             --package "system-images;android-33;google_apis;x86_64" \
             --device "pixel_5" \
@@ -46,13 +53,12 @@ jobs:
 
       - name: Start Virtual Framebuffer, Emulator, and VNC
         run: |
-          # 1. Start Xvfb (Virtual display) on screen :1 with standard phone aspect ratio
+          # 1. Start Xvfb (Virtual display) on screen :1
           Xvfb :1 -screen 0 1080x1920x24 &
           sleep 2
           export DISPLAY=:1
           
           # 2. Start the Android Emulator inside the virtual window
-          # Using swiftshader for software-backed GL rendering inside the headless runner
           $ANDROID_HOME/emulator/emulator -avd test_avd \
             -no-audio \
             -no-boot-anim \
@@ -60,12 +66,11 @@ jobs:
             -camera-back none \
             -camera-front none &
           
-          # 3. Start x11vnc to scrape display :1 and host a VNC server on port 5900
+          # 3. Start x11vnc to bridge the Xvfb display to a VNC port
           x11vnc -display :1 -nopw -forever -bg -rfbport 5900 &
           sleep 2
 
-          # 4. Use noVNC to translate VNC raw streams into an HTTP Websocket on port 8083
-          # This maps the default index file so hitting the root URL loads the UI directly
+          # 4. Use noVNC to make the stream readable via a standard browser
           ln -s /usr/share/novnc/vnc.html /usr/share/novnc/index.html
           /usr/share/novnc/utils/launch.sh --vnc localhost:5900 --listen 8083 &
           sleep 2
@@ -76,6 +81,6 @@ jobs:
           echo "🚀 LOOK BELOW FOR THE '.trycloudflare.com' LINK TO CONNECT 🚀"
           echo "=========================================================="
           
-          # Force cloudflared to block and keep the workflow alive while streaming port 8083
+          # Block and listen on port 8083, creating the public temporary proxy URL
           cloudflared tunnel --url http://localhost:8083
           
