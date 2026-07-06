@@ -10,6 +10,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify KVM support
+        run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "::error::/dev/kvm not found — emulator cannot run with acceleration on this runner."
+            exit 1
+          fi
+          ls -la /dev/kvm
+
       - name: Enable KVM Hardware Acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -26,6 +34,9 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
       # Cache the Android SDK System Images & Emulator binary
       - name: Cache Android SDK Components
@@ -70,32 +81,58 @@ jobs:
         run: |
           sudo dpkg -i cloudflared.deb
 
-      - name: Start Virtual Framebuffer, Emulator, and VNC
+      - name: Start Virtual Framebuffer and Emulator
         run: |
           # 1. Start Xvfb (Virtual display)
           Xvfb :1 -screen 0 1080x1920x24 &
           sleep 3
           export DISPLAY=:1
-          
-          # 2. Start the Android Emulator
+
+          # 2. Start the Android Emulator, logging output instead of discarding it
           $ANDROID_HOME/emulator/emulator -avd test_avd \
             -no-audio \
             -no-boot-anim \
+            -no-window \
             -gpu swiftshader_indirect \
             -camera-back none \
-            -camera-front none &
-          
-          # 3. Start x11vnc bound specifically to IPv4 loopback
+            -camera-front none > emulator.log 2>&1 &
+
+          # 3. Wait for the device to register with adb
+          echo "Waiting for device..."
+          $ANDROID_HOME/platform-tools/adb wait-for-device
+
+          # 4. Poll until Android has actually finished booting (not just Xvfb existing)
+          echo "Waiting for boot to complete..."
+          boot_completed=""
+          tries=0
+          until [[ "$boot_completed" == "1" ]] || [[ $tries -ge 60 ]]; do
+            boot_completed=$($ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            sleep 2
+            tries=$((tries+1))
+          done
+
+          if [[ "$boot_completed" != "1" ]]; then
+            echo "::error::Emulator failed to boot within timeout (120s)"
+            echo "----- emulator.log -----"
+            cat emulator.log
+            exit 1
+          fi
+          echo "Emulator boot completed after $((tries*2))s"
+
+      - name: Start VNC and noVNC Stream
+        run: |
+          export DISPLAY=:1
+
+          # 1. Start x11vnc bound specifically to IPv4 loopback
           x11vnc -display :1 -nopw -forever -bg -listen 127.0.0.1 -rfbport 5900 &
           sleep 3
 
-          # Set up local web root assets for noVNC
+          # 2. Set up local web root assets for noVNC
           mkdir -p ./novnc_web
           cp -r /usr/share/novnc/* ./novnc_web/
           ln -sf ./vnc.html ./novnc_web/index.html
-          
-          # 4. FIX: Run websockify directly to bridge port 8083 to VNC port 5900
-          # This avoids launch.sh's shell environment script drops
+
+          # 3. Run websockify directly to bridge port 8083 to VNC port 5900
           websockify --web ./novnc_web 127.0.0.1:8083 127.0.0.1:5900 &
           sleep 5
 
@@ -104,7 +141,6 @@ jobs:
           echo "=========================================================="
           echo "🚀 LOOK BELOW FOR THE '.trycloudflare.com' LINK TO CONNECT 🚀"
           echo "=========================================================="
-          
+
           # Route directly to the verified IPv4 websockify server
           cloudflared tunnel --url http://127.0.0.1:8083
-          
