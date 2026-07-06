@@ -52,6 +52,7 @@ jobs:
           arch: x86_64
           profile: pixel_5
           emulator-boot-timeout: 600
+          emulator-options: -no-snapshot -gpu swiftshader_indirect -no-audio -camera-back none -camera-front none
           script: |
             # By this point the action has already booted the emulator and
             # confirmed it's ready — no manual boot-wait needed.
